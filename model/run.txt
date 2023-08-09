@@ -1,0 +1,7 @@
+# this file is meant to be run on the server, not locally
+# this is why the directories are different
+
+conda activate tf
+cd ./har/esp32/model/
+
+nohup python -u ./train_model.py > ./results/output.log &
