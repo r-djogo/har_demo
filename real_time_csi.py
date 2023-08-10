@@ -5,6 +5,7 @@ import csv
 
 from statistics import mode
 from scipy.io import savemat, loadmat
+from threading import Thread, Event
 
 from wait_timer import WaitTimer
 from read_stdin import readline, print_until_first_csi_line
@@ -70,6 +71,15 @@ def gesture_classification(model, csi):
 
     return gestures[pred_class]
 
+def run_model(model, data, gesture_buff, last_gesture, gui_output):
+    gesture = gesture_classification(model, data)
+    gesture_buff.append(gesture)
+    current_gesture = mode(gesture_buff)
+    if len(gesture_buff) == 5 and current_gesture != last_gesture:
+        last_gesture = current_gesture
+        # print(current_gesture)
+        gui_output.prediction.emit(current_gesture)
+
 def real_time(csi_data_output, gui_output, stop_event, use_model, use_plot=False, save_data=False, total_len=9999, early_stop=None):
     # Wait Timers
     total_exp_timer = WaitTimer(total_len)
@@ -80,7 +90,7 @@ def real_time(csi_data_output, gui_output, stop_event, use_model, use_plot=False
     gesture_buff = collections.deque(maxlen=5)
 
     # load the model from file
-    capshar = tf.keras.models.load_model("/home/raso/esp/esp32-csi-tool/python_utils/demo_gui/model/capshar_home_demo.hdf5",
+    capshar = tf.keras.models.load_model("/home/raso/esp/esp32-csi-tool/python_utils/demo_gui/model/capshar_lab_demo.hdf5",
                                         custom_objects={"PrimaryCaps": PrimaryCaps, "marginLoss": marginLoss,
                                                         "FCCaps": FCCaps, "Length": Length, "Mask": Mask})
     
@@ -108,25 +118,15 @@ def real_time(csi_data_output, gui_output, stop_event, use_model, use_plot=False
             if process(line, perm_amp, csi_dict, save_data, timer):
                 if use_plot:
                     if use_model.is_set():
-                        if lag_count == 5:
-                            csi_data_output.cb_append_data_array(np.array(perm_amp)[-6:-1,23])
-                            lag_count = 0
-                        else:
-                            lag_count = lag_count + 1
-
                         if gesture_wait_timer.check() and len(perm_amp) == 400:
                             gesture_wait_timer.update()
-                            gesture = gesture_classification(capshar, perm_amp)
-                            gesture_buff.append(gesture)
-
-
-                            current_gesture = mode(gesture_buff)
-                            if len(gesture_buff) == 5 and current_gesture != last_gesture:
-                                last_gesture = current_gesture
-                                # print(current_gesture)
-                                gui_output.prediction.emit(current_gesture)
-                    else:
-                        csi_data_output.cb_append_data_point(np.array(perm_amp)[-1,23])
+                            model_thread = Thread(target=run_model, args=(capshar,
+                                                                          perm_amp,
+                                                                          gesture_buff,
+                                                                          last_gesture,
+                                                                          gui_output,))
+                            model_thread.start()
+                    csi_data_output.cb_append_data_point(np.array(perm_amp)[-1,23])
                 elif save_data:
                     if gesture_wait_timer.check() and len(perm_amp) == 400:
                         gesture_wait_timer.update()
@@ -203,8 +203,6 @@ def clear_stdin(stop_clear):
 
 def csi_playback(csi_file, csi_output, replay_csv, stop_event, replay_outputs):
     csi_dict = loadmat(csi_file)
-    # time = csi_dict["time"]
-    # csi = csi_dict["csi_amp"]
 
     # load csv
     
